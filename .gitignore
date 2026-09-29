@@ -67,3 +67,9 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Local scratch scripts and build artifacts
+/temp/
+
+# Local scratch scripts and build artifacts
+/temp/
