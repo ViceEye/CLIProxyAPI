@@ -86,6 +86,9 @@ func (e *OpenAICompatExecutor) HttpRequest(ctx context.Context, auth *cliproxyau
 }
 
 func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+	if opts.Alt != "responses/compact" && opts.SourceFormat == sdktranslator.FormatOpenAIResponse && helps.NeedsNativeResponses(req.Payload) {
+		return e.executeNativeResponses(ctx, auth, req, opts)
+	}
 	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
 	if endpointPath := openAICompatImageEndpointPath(opts); endpointPath != "" {
 		return e.executeImages(ctx, auth, req, opts, endpointPath)
@@ -334,6 +337,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
+	nativeResponses := from == sdktranslator.FormatOpenAIResponse && helps.NeedsNativeResponses(req.Payload)
+	endpoint := "/chat/completions"
+	if nativeResponses {
+		to = sdktranslator.FormatOpenAIResponse
+		endpoint = "/responses"
+	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
@@ -352,7 +361,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	if helps.ShouldNormalizeOpenAIToolResultsForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel) {
 		translated = helps.NormalizeOpenAIToolResultsTextOnly(translated)
 	}
-	if opts.Alt != "responses/compact" {
+	if opts.Alt != "responses/compact" && !nativeResponses {
 		useMCT := helps.ShouldUseMaxCompletionTokensForModel(e.resolveCompatConfig(auth, req), baseModel, requestedModel)
 		translated = helps.NormalizeOpenAIMaxTokens(translated, useMCT)
 		translated, err = e.applyPromptCacheKey(ctx, auth, from, baseModel, req, opts, translated)
@@ -363,10 +372,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 	// Request usage data in the final streaming chunk so that token statistics
 	// are captured even when the upstream is an OpenAI-compatible provider.
-	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	if nativeResponses {
+		translated = helps.SetBoolIfDifferent(translated, "stream", true)
+	} else {
+		translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
@@ -380,6 +393,13 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes
+	}
+	// Preserve the client's feature declaration across chained Responses providers.
+	// Never invent beta features or forward the client's authorization headers.
+	if nativeResponses {
+		for _, value := range opts.Headers.Values("X-Codex-Beta-Features") {
+			httpReq.Header.Add("X-Codex-Beta-Features", value)
+		}
 	}
 	util.ApplyCustomHeadersFromAttrs(httpReq, attrs, opts.Headers)
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -435,6 +455,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, &param)
 		var streamUsage helps.StreamUsageBuffer
 		var seenDone bool
+		compaction := helps.ResponsesCompactionStream{Required: nativeResponses && helps.HasResponsesCompactionTrigger(req.Payload)}
 		var streamFailed bool
 		var streamAborted bool
 		var upstreamEvent string
@@ -486,6 +507,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				publishStreamError(statusErr{code: http.StatusBadGateway, msg: "upstream stream ended with incomplete SSE data frame"}, false)
 				return true
 			}
+			if nativeResponses && !isDone {
+				dataPayload = compaction.Normalize(dataPayload)
+			}
 			if !isDone {
 				if streamErr, isError := openAICompatStreamDataError(dataPayload, eventName); isError {
 					publishStreamError(streamErr, true)
@@ -493,6 +517,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 			}
 
+			if nativeResponses && isDone {
+				publishStreamError(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream ended before response.completed"}, false)
+				return true
+			}
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, streamLine, &param, claudeInputTokens)
 			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
@@ -508,7 +536,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				publishStreamError(statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}, false)
 				return true
 			}
-			if isDone {
+			if isDone || nativeResponses && gjson.GetBytes(dataPayload, "type").String() == "response.completed" {
 				seenDone = true
 				return true
 			}
@@ -520,7 +548,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
-			streamUsage.ObserveOpenAIStream(line)
+			if nativeResponses {
+				detail, ok := helps.ParseCodexUsage(bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:"))))
+				streamUsage.Observe(detail, ok)
+			} else {
+				streamUsage.ObserveOpenAIStream(line)
+			}
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {
