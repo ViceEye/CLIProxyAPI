@@ -286,7 +286,7 @@ func (r *Registry) TranslateStream(ctx context.Context, from, to Format, model s
 	}
 	if isResponsesClientFormat(to) {
 		for i, output := range outputs {
-			outputs[i] = CanonicalizeCodexToolArguments(output, true)
+			outputs[i] = NormalizeCodexToolArgumentsForClient(ctx, output, true)
 		}
 	}
 	return outputs
@@ -320,7 +320,7 @@ func (r *Registry) TranslateNonStream(ctx context.Context, from, to Format, mode
 		body = hooks.NormalizeResponseAfter(ctx, from, to, model, originalRequestRawJSON, requestRawJSON, body, false)
 	}
 	if isResponsesClientFormat(to) {
-		if updated := CanonicalizeCodexToolArguments(body, false); updated != nil {
+		if updated := NormalizeCodexToolArgumentsForClient(ctx, body, false); updated != nil {
 			body = updated
 		}
 	}
