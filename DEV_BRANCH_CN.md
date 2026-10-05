@@ -67,3 +67,27 @@ go build -o temp/cli-proxy-api-dev ./cmd/server
 - `cmd/server` 编译通过，产物位于 `temp/cli-proxy-api-dev`。
 
 未进行真实提供商 OAuth 请求或生产服务切换。
+
+## GitHub 镜像构建
+
+推送到 `ViceEye/CLIProxyAPI:dev` 后，`dev-image` 工作流先运行格式检查、
+`go vet` 和全量测试，再用原生 amd64、arm64 runner 构建并发布 GHCR 镜像。
+使用仓库内置的 `GITHUB_TOKEN`，不需要 Docker Hub secret。
+
+- 滚动标签：`ghcr.io/viceeye/cli-proxy-api:dev`。
+- 固定版本：`ghcr.io/viceeye/cli-proxy-api:sha-<完整提交 SHA>`。
+- 默认镜像保留 CGO 和 Debian bookworm 运行环境，支持现有动态库插件。
+- 不在构建过程中刷新模型目录，镜像对应已提交的源码状态。
+- 首次发布的 GHCR package 需设为 public，才能匿名拉取；私有 package
+  需要先用具有 `read:packages` 权限的凭据登录 GHCR。
+
+服务器沿用现有配置、凭证和插件挂载，只需修改现有 Compose 服务的 image，
+或设置 `CLI_PROXY_IMAGE`：
+
+```sh
+export CLI_PROXY_IMAGE=ghcr.io/viceeye/cli-proxy-api:dev
+docker compose pull cli-proxy-api
+docker compose up -d --no-build cli-proxy-api
+```
+
+生产部署优先使用固定提交标签，保留上一版本的固定标签用于回退。
