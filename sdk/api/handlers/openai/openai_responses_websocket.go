@@ -764,7 +764,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				return
 			}
 			attemptedUpstreamMode = upstreamModeForAuth(selectedAuth)
-			steeringAllowed := h.Cfg == nil || !h.Cfg.OAuthOnlyFields["codex.response-steering"] || selectedAuth.AuthKind() != coreauth.AuthKindAPIKey
+			// Shared upstream steering uses the current runtime setting. Legacy
+			// OAuth scope metadata cannot override this provider-wide flag.
+			steeringAllowed := h.Cfg != nil && h.Cfg.CodexResponseSteering
 			codexDuplexStream.Store(executorDuplexInput != nil && steeringAllowed && attemptedUpstreamMode == responsesWebsocketUpstreamModeWS && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 			preserveNativeOutput.Store(nativeRequest && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 		})

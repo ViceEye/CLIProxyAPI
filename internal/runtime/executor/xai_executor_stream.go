@@ -39,6 +39,9 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	prepared.body = prepared.finalizePayload(prepared.body)
+	if errGuard := helps.ValidateOutboundToolContract(ctx, prepared.body, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return nil, errGuard
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 	if err != nil {
 		return nil, err

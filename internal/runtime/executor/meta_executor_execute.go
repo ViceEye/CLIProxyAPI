@@ -73,11 +73,11 @@ func (e *MetaExecutor) prepareResponsesRequest(ctx context.Context, auth *clipro
 	body = helps.NormalizeCodexToolIntegerTypes(body, opts.Headers)
 	body = helps.RewriteCodexOrphanDelegationInput(ctx, opts.Headers, body, e.cfg)
 	body = helps.RewriteCodexMultiAgentV2InputForCompat(ctx, opts.Headers, body, e.cfg)
+	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, e.Identifier(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	if errGuard := helps.ValidateOutboundToolContract(ctx, body, helps.WireContractByteLimit(ctx)); errGuard != nil {
 		return nil, errGuard
 	}
 
-	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, e.Identifier(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	return &metaPreparedRequest{
 		applyPatch:      applyPatch,
 		baseModel:       baseModel,

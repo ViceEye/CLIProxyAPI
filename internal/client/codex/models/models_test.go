@@ -228,6 +228,32 @@ func TestCodexClientModelsResponse_RequiresTemplateAndCodexProvidersForSearchToo
 	}
 }
 
+func TestCodexClientModelsResponse_SearchAndApplyPatchCapabilitiesRemainIndependent(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(fmt.Sprint(supported), func(t *testing.T) {
+			resp := BuildResponseForClientWithToolCapabilities(
+				[]map[string]any{{"id": "dev-bridge-model"}},
+				func(string) []string { return []string{"gemini"} },
+				nil,
+				func(string) bool { return true },
+				false,
+				"0.153.4",
+				func(string) *bool { return &supported },
+			)
+			models, ok := resp["models"].([]map[string]any)
+			if !ok || len(models) != 1 {
+				t.Fatalf("models = %#v, want one model", resp["models"])
+			}
+			if got := models[0]["supports_search_tool"]; got != supported {
+				t.Errorf("supports_search_tool = %#v, want %v", got, supported)
+			}
+			if got := models[0]["apply_patch_tool_type"]; got != "freeform" {
+				t.Errorf("apply_patch_tool_type = %#v, want freeform", got)
+			}
+		})
+	}
+}
+
 func TestCodexClientModelsResponse_CoreSearchResolverKeepsNonCodexTemplateCleanup(t *testing.T) {
 	resp := BuildResponseForClientWithSearchCapabilities(
 		[]map[string]any{{"id": "gpt-5.5"}},

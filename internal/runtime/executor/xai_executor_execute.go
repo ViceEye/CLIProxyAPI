@@ -45,6 +45,9 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	prepared.body = prepared.finalizePayload(prepared.body)
+	if errGuard := helps.ValidateOutboundToolContract(ctx, prepared.body, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return resp, errGuard
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 	if err != nil {
 		return resp, err
@@ -191,7 +194,7 @@ func (e *XAIExecutor) executeCompactRequest(ctx context.Context, auth *cliproxya
 		prepared.body, _ = sjson.SetBytes(prepared.body, "previous_response_id", previousResponseID)
 	}
 	if errGuard := helps.ValidateOutboundToolContract(ctx, prepared.body, helps.WireContractByteLimit(ctx)); errGuard != nil {
-		return nil, nil, nil, errGuard
+		return nil, nil, nil, nil, errGuard
 	}
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, prepared.baseModel, auth)
@@ -200,6 +203,9 @@ func (e *XAIExecutor) executeCompactRequest(ctx context.Context, auth *cliproxya
 
 	requestURL := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
 	prepared.body = prepared.finalizePayload(prepared.body)
+	if errGuard := helps.ValidateOutboundToolContract(ctx, prepared.body, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return nil, nil, nil, reporter, errGuard
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(prepared.body))
 	if err != nil {
 		return nil, nil, nil, nil, err
