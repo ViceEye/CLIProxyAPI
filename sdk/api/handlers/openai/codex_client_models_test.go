@@ -232,6 +232,31 @@ func TestCodexClientModelsResponse_OAuthAliasesIntegration(t *testing.T) {
 	}
 }
 
+func TestCodexClientModelsDefaultOffPreservesLegacySearchCapability(t *testing.T) {
+	const modelID = "codex-main"
+	modelRegistry := registry.GetGlobalRegistry()
+	modelRegistry.RegisterClient("codex-responses-tools-off-test", "codex", []*registry.ModelInfo{{
+		ID: modelID, MetadataModelID: "gpt-6-astra",
+	}})
+	t.Cleanup(func() { modelRegistry.UnregisterClient("codex-responses-tools-off-test") })
+
+	manager := auth.NewManager(nil, nil, nil)
+	manager.SetConfig(&config.Config{})
+	base := handlers.NewBaseAPIHandlers(&config.SDKConfig{}, manager)
+	handler := NewOpenAIAPIHandler(base)
+	response := handler.codexClientModelsResponse()
+	models, _ := response["models"].([]map[string]any)
+	for _, model := range models {
+		if model["slug"] == modelID {
+			if model["supports_search_tool"] != true {
+				t.Fatalf("default-off model capability = %v, want legacy true", model["supports_search_tool"])
+			}
+			return
+		}
+	}
+	t.Fatalf("missing model %q", modelID)
+}
+
 func TestCodexClientModelsResponse_DevinDisplayName(t *testing.T) {
 	devinClientID := "test-sdk-devin-models"
 	openaiClientID := "test-sdk-openai-models"

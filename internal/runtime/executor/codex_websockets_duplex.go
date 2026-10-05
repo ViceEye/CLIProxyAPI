@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/responsestools"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -122,9 +123,9 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 			}
 			cancel()
 		}
-		reject := func(message string) bool {
+		rejectWithStatus := func(status int, message string) bool {
 			payload, _ := json.Marshal(map[string]any{
-				"type": "error", "status": http.StatusBadRequest,
+				"type": "error", "status": status,
 				"error": map[string]string{"type": "invalid_request_error", "message": message},
 			})
 			// Reader cleanup joins this writer before closing out. Cancellation must
@@ -135,6 +136,20 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 			case <-streamCtx.Done():
 				return false
 			}
+		}
+		reject := func(message string) bool {
+			return rejectWithStatus(http.StatusBadRequest, message)
+		}
+		// rejectItemIDRepair reports a request-scoped identity failure to this
+		// client only. The frame is never sent upstream and never becomes
+		// pending or steering state, so the connection stays usable for the
+		// next well-formed frame.
+		rejectItemIDRepair := func(err error) bool {
+			var compat *responsestools.ToolCompatibilityError
+			if !errors.As(err, &compat) || compat == nil {
+				return false
+			}
+			return rejectWithStatus(compat.StatusCode(), compat.Error())
 		}
 		processCreatePayload := func(payload []byte) bool {
 			metadataMu.Lock()
@@ -194,6 +209,9 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 			nextOpts.OriginalRequest = payload
 			prepared, errPrepare := e.prepareCodexWebsocketStream(streamCtx, auth, nextReq, nextOpts)
 			if errPrepare != nil {
+				if rejectItemIDRepair(errPrepare) {
+					return true
+				}
 				fail(errPrepare)
 				return false
 			}
@@ -283,6 +301,19 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					steerReq.Payload = payload
 					payload = helps.NewPayloadFinalizer(e.cfg, "codex-websockets", thinking.ParseSuffix(req.Model).ModelName, "codex", "", payload, steerReq, opts)(payload)
 					payload, _ = sjson.SetBytes(payload, "type", "response.steer")
+					// A steer frame may replay items the client stored earlier. It is
+					// checked before any steering state is registered, so a refused
+					// frame cannot lock the connection. Control frames still bypass
+					// every response.create translation and default.
+					repairedSteer, errSteer := helps.RepairResponsesToolItemIDs(e.cfg, payload)
+					if errSteer != nil {
+						if rejectItemIDRepair(errSteer) {
+							continue
+						}
+						fail(errSteer)
+						return
+					}
+					payload = repairedSteer
 					parent := gjson.GetBytes(payload, "previous_response_id").String()
 					metadataMu.Lock()
 					settings := responseSettings[parent]

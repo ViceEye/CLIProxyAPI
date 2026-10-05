@@ -36,6 +36,13 @@ func RewriteCodexOrphanDelegationInput(ctx context.Context, headers http.Header,
 	return multiagentv2.RewriteCodexOrphanDelegationInputForConfig(ctx, headers, payload, cfg)
 }
 
+// RewriteCodexMultiAgentV2InputForCompat converts Codex multi-agent input for a
+// compat model regardless of whether the target protocol translator already
+// handles it, covering executors that translate to codex themselves.
+func RewriteCodexMultiAgentV2InputForCompat(ctx context.Context, headers http.Header, payload []byte, cfg *config.Config) []byte {
+	return multiagentv2.RewriteCodexMultiAgentV2Input(ctx, headers, payload, cfg, true)
+}
+
 // TranslateRequestWithCodexMultiAgentV2 normalizes official Codex multi-agent
 // input before translating it to a non-Codex target protocol.
 func TranslateRequestWithCodexMultiAgentV2(ctx context.Context, headers http.Header, cfg *config.Config, from, to sdktranslator.Format, model string, payload []byte, stream bool) []byte {

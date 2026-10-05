@@ -30,6 +30,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
+	if cliproxyexecutor.WebsocketInputFromContext(ctx) != nil && e.cfg != nil &&
+		(e.cfg.Codex.ResponseSteering || e.cfg.CodexResponseSteering) &&
+		cliproxyexecutor.WireContractFromContext(ctx) != nil {
+		return nil, helps.ResponsesToolsDuplexSteeringError()
+	}
 
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
@@ -52,6 +57,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	optimizeMultiAgentV2 := prepared.optimizeMultiAgentV2
 	multiAgentV2Conflict := prepared.multiAgentV2Conflict
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
+	wsReqBody := frameCodexWebsocketRequestBody(clientBody)
+	if errGuard := helps.ValidateOutboundToolContract(ctx, wsReqBody, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return nil, errGuard
+	}
 
 	var authID, authLabel, authType, authValue string
 	authID = auth.ID
@@ -78,7 +87,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 
-	wsReqBody := frameCodexWebsocketRequestBody(clientBody)
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",
@@ -196,12 +204,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 			readCh = sess.activate(conn)
 			restoreMultiAgentV2 = !multiAgentV2Conflict && (optimizeMultiAgentV2 || sess.isMultiAgentV2Optimized(conn))
-			wsReqBodyRetry := frameCodexWebsocketRequestBody(clientBody)
 			helps.RecordAPIWebsocketRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 				URL:       wsURL,
 				Method:    "WEBSOCKET",
 				Headers:   wsHeaders.Clone(),
-				Body:      wsReqBodyRetry,
+				Body:      wsReqBody,
 				Provider:  e.Identifier(),
 				AuthID:    authID,
 				AuthLabel: authLabel,
@@ -211,7 +218,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			recordAPIWebsocketHandshake(ctx, e.cfg, respHSRetry)
 			reporter.StartResponseTTFT()
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
-			if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBodyRetry); errSendRetry != nil {
+			if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSendRetry != nil {
 				errSendRetry = mapCodexWebsocketWriteError(sess, conn, errSendRetry)
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "send_retry", errSendRetry)
 				e.invalidateUpstreamConn(sess, conn, "send_error", errSendRetry)
@@ -219,7 +226,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				sess.reqMu.Unlock()
 				return nil, errSendRetry
 			}
-			wsReqBody = wsReqBodyRetry
 		} else {
 			if sess != nil {
 				e.invalidateUpstreamConn(sess, conn, "send_error", errSend)
@@ -768,7 +774,22 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
 	}
+	// A successor frame on a duplex connection never passes through the
+	// manager, so the replayed history is repaired here as well. Only a
+	// Responses-shaped client body carries input items the repair may touch.
 	originalPayload := originalPayloadSource
+	if helps.IsResponsesFamilyFormat(from) {
+		repaired, errRepair := helps.RepairResponsesToolItemIDs(e.cfg, originalPayloadSource)
+		if errRepair != nil {
+			return nil, errRepair
+		}
+		originalPayload = repaired
+		repairedPayload, errPayload := helps.RepairResponsesToolItemIDs(e.cfg, req.Payload)
+		if errPayload != nil {
+			return nil, errPayload
+		}
+		req.Payload = repairedPayload
+	}
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
 	originalTranslated, body, updatesChanged := translateCodexRequestPairWithUpdateIntent(from, to, baseModel, originalPayload, req.Payload, true, isCompat)
 
@@ -804,6 +825,12 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		return nil, errPromptCache
 	}
 	body = finalizePayload(helps.SanitizeCodexInputItemIDs(body))
+	// The rules above can reintroduce a known mismatch, so the final wire body
+	// is checked once more. A healthy body is unchanged by the second pass.
+	body, err = helps.RepairResponsesToolItemIDs(e.cfg, body)
+	if err != nil {
+		return nil, err
+	}
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
 	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, body, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)

@@ -146,6 +146,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		translated = sanitizeOpenAIResponsesReasoningEncryptedContent(ctx, "openai compat executor", translated)
 	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
+	if errGuard := helps.ValidateOutboundToolContract(ctx, translated, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return resp, errGuard
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
@@ -378,6 +381,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
 	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
+	if errGuard := helps.ValidateOutboundToolContract(ctx, translated, helps.WireContractByteLimit(ctx)); errGuard != nil {
+		return nil, errGuard
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
