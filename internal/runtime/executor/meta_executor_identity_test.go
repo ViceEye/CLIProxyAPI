@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -49,7 +50,8 @@ func TestMetaStreamPreservesDeclaredToolName(t *testing.T) {
 		t.Fatalf("fixture did not convert agent message: %s", prepared.body)
 	}
 	// The non-stream path is a positive control: the declared tool remains callable.
-	nonStream, err := e.translateMetaCompleted(context.Background(), req, prepared, []byte("data: "+completion+"\n\n"))
+	var upstreamUsage helps.StreamUsageBuffer
+	nonStream, err := e.translateMetaCompleted(context.Background(), req, prepared, []byte("data: "+completion+"\n\n"), &upstreamUsage)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,18 @@ Responses 客户端工具协议及必要兼容修复。Nexus 子 Key 功能位�
   `enabled: false` 可停用。协议边界见 `docs/responses-tools_CN.md`。
 - 上游 PR 及移植提交保留历史；不引入 fork 的发布、Homebrew 或上游摄入流程。
 
+## 2026-10-12 同步
+
+- 合并官方 main：`091ff27f`，较上一基线新增 99 个提交，不重写 `dev` 历史。
+- 保留 compact v2、Responses 工具桥接、工具参数与 schema 规范化。
+- 接入上游 Claude 原生工具搜索、Claude 压缩、WebSocket interrupt 和凭证版本校验。
+- 模型目录兼容上游原生工具搜索解析器；开启本地桥接时，搜索能力仍由实际路由策略保守决定，
+  不覆盖独立的 apply_patch 能力。停用本地桥接后沿用上游原生能力判断。
+- 适配 Meta usage 参数，修复固定日期 golden、Windows 换行比较和取消协程同步问题。
+- 修复 WebSocket 终态发送与本地 HTTP interrupt 标记清理之间的竞态：
+  在发送终态前清除标记，避免迟到的控制帧取消已完成的请求。
+- 本次仅同步 `dev`，不修改 `fork/main`，不执行生产部署。
+
 ## 同步和验证
 
 在干净工作树中同步，保留 merge 历史，避免重写已共享的长期分支：
@@ -55,6 +67,17 @@ go build -o temp/cli-proxy-api-dev ./cmd/server
 临时文件与编译产物放入 `temp/`。分支验证不等于真实提供商或生产部署验证，
 测试不得使用实际 OAuth 凭据。
 
+### Windows Docker 启动
+
+此工作区通过直接进程启动 Docker Desktop 曾出现 WSL 目录初始化错误；
+通过 Explorer 启动后引擎可正常就绪。启动环境差异已确认，具体权限或环境因素未确定。
+优先使用桌面 Explorer 启动入口，并以 `docker info` 成功为就绪条件，不重复直接启动。
+
+```powershell
+Start-Process -FilePath explorer.exe -ArgumentList '"C:\Program Files\Docker\Docker\Docker Desktop.exe"' -WindowStyle Hidden
+docker info
+```
+
 ## 本次验证
 
 2026-10-05 使用 Docker `golang:1.26.7-bookworm` 在 Linux amd64 验证：
@@ -67,6 +90,16 @@ go build -o temp/cli-proxy-api-dev ./cmd/server
 - `cmd/server` 编译通过，产物位于 `temp/cli-proxy-api-dev`。
 
 未进行真实提供商 OAuth 请求或生产服务切换。
+
+2026-10-12 使用相同的 Go 1.26.7 Linux 容器验证同步后的代码：
+
+- 全量 `go test ./... -count=1`：102 个测试包通过。
+- 工具协议核心、凭证调度、执行器和 OpenAI handler 的全包竞态检查通过。
+- 终态中断与 HTTP 取消相关回归测试在竞态检测下各重复 50 次通过。
+- `go vet ./...` 和 `cmd/server` 编译通过。
+- 编译产物为 `temp/cli-proxy-api-sync-20261012`；JSON 测试报告位于 `temp/sync-*-20261012.json`。
+
+未使用真实 OAuth 凭据，未部署生产服务器。
 
 ## GitHub 镜像构建
 
